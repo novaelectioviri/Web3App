@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "outDir": "dist",
+    "rootDir": ".",
+    "declaration": true
+  },
+  "include": [
+    "contracts/**/*.ts",
+    "scripts/**/*.ts",
+    "tests/**/*.ts",
+    "wrappers/**/*.ts",
+    "blueprint.config.ts"
+  ],
+  "exclude": ["node_modules", "frontend", "dist", "build"]
+}

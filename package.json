@@ -1,0 +1,36 @@
+{
+  "name": "web3app",
+  "version": "1.0.0",
+  "private": true,
+  "homepage": "https://novaelectioviri.github.io/Web3App/",
+  "description": "TON voting dApp — NFT-gated proposals with jetton escrow",
+  "workspaces": [
+    "frontend"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace=frontend",
+    "dev": "npm run dev --workspace=frontend",
+    "preview": "npm run preview --workspace=frontend",
+    "compile": "npx blueprint build --all",
+    "test": "jest",
+    "test:contracts": "npx blueprint test",
+    "deploy:contracts": "npx blueprint run",
+    "lint:frontend": "npm run lint --workspace=frontend"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "devDependencies": {
+    "@ton/blueprint": "^0.29.0",
+    "@ton/core": "^0.63.0",
+    "@ton/crypto": "^3.3.0",
+    "@ton/sandbox": "^0.26.0",
+    "@ton/test-utils": "^0.5.0",
+    "@ton/ton": "^16.2.0",
+    "@types/jest": "^29.5.14",
+    "@types/node": "^20.17.0",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.2.5",
+    "typescript": "^5.7.2"
+  }
+}
