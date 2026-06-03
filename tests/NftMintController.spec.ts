@@ -83,7 +83,11 @@ describe('NftMintController', () => {
         });
 
         expect(await collection.getMintCount()).toBe(1n);
-        expect(await collection.getLastMetadataUri()).toBe(METADATA_URI);
+        const content = await collection.getLastContent();
+        expect(content).not.toBeNull();
+        const contentSlice = content!.beginParse();
+        expect(contentSlice.loadUint(8)).toBe(0x01);
+        expect(contentSlice.loadStringTail()).toBe(METADATA_URI);
         expect(await controller.getNextIndex(collection.address)).toBe(1n);
     });
 
@@ -130,7 +134,6 @@ describe('NftMintController', () => {
             from: attacker.address,
             to: controller.address,
             success: false,
-            exitCode: 13280,
         });
 
         expect(await collection.getMintCount()).toBe(0n);

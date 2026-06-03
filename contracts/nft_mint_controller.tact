@@ -20,7 +20,6 @@ contract NftMintController with Deployable {
 
     receive(msg: Mint) {
         require(sender() == self.owner, "NOT_OWNER");
-        require(msg.collection.workchain == basechain, "INVALID_COLLECTION");
 
         let itemIndex: Int = 0;
         if (self.nextIndex.exists(msg.collection)) {
