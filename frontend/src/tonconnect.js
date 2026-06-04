@@ -17,7 +17,6 @@ export function getTonConnectUI() {
   if (!tonConnectUI) {
     tonConnectUI = new TonConnectUI({
       manifestUrl,
-      buttonRootId: 'ton-connect-button',
       uiPreferences: {
         theme: 'SYSTEM',
       },

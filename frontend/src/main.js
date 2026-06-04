@@ -131,10 +131,17 @@ function render() {
     </div>
   `;
   bindGlobalActions();
-  tonConnectUI.uiOptions = {
-    buttonRootId: 'ton-connect-button',
-    uiPreferences: { theme: 'SYSTEM' },
-  };
+  const connectRoot = document.querySelector('#ton-connect-button');
+  if (connectRoot) {
+    tonConnectUI.uiOptions = {
+      buttonRootId: 'ton-connect-button',
+      uiPreferences: { theme: 'SYSTEM' },
+    };
+  } else {
+    tonConnectUI.uiOptions = {
+      uiPreferences: { theme: 'SYSTEM' },
+    };
+  }
 }
 
 /**
