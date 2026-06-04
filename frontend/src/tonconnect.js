@@ -2,14 +2,33 @@ import {
   ESCROW_ADDRESS,
   NETWORK,
   PROPOSAL_FEE,
+  TONCONNECT_MANIFEST_URL,
   VOTE_FEE,
   VOTE_LOCK,
 } from './constants.js';
 
-const manifestUrl = new URL(
-  './tonconnect-manifest.json',
-  window.location.href.split('#')[0],
-).toString();
+const DEFAULT_REMOTE_MANIFEST_URL =
+  'https://novaelectioviri.github.io/Web3App/tonconnect-manifest.json';
+
+function resolveManifestUrl() {
+  if (TONCONNECT_MANIFEST_URL) {
+    return TONCONNECT_MANIFEST_URL;
+  }
+
+  const protocol = window.location.protocol;
+  const isLocalhost =
+    window.location.hostname === 'localhost' ||
+    window.location.hostname === '127.0.0.1';
+  const isUnsafeProtocol = protocol !== 'https:' && protocol !== 'chrome-extension:';
+
+  if (isLocalhost || isUnsafeProtocol) {
+    return DEFAULT_REMOTE_MANIFEST_URL;
+  }
+
+  return new URL('./tonconnect-manifest.json', window.location.href.split('#')[0]).toString();
+}
+
+const manifestUrl = resolveManifestUrl();
 
 /** @type {any | null} */
 let tonConnectUI = null;
