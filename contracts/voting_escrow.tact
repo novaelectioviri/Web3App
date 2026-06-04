@@ -36,6 +36,7 @@ const CONSENSUS: Int = 75;
 const MIN_QUORUM: Int = 3;
 const MAX_CLAIM_BONUS: Int = ton("0.3");
 const GAS_RESERVE: Int = ton("0.15");
+const VOTE_LOCK: Int = GAS_RESERVE;
 const CLAIM_RELEASE_OPCODE: Int = 0x434c4149;
 
 contract VotingEscrow with Deployable {
@@ -77,7 +78,8 @@ contract VotingEscrow with Deployable {
     receive(msg: CreateProposal) {
         require(msg.nftProofCount > 0, "NFT_GATE_FAIL");
         require(msg.jettonProofAmount > 0, "JETTON_GATE_FAIL");
-        require(context().value >= PROPOSAL_FEE, "LOW_PROPOSAL_FEE");
+        let minProposalValue = PROPOSAL_FEE + msg.tonAmount;
+        require(context().value >= minProposalValue, "LOW_PROPOSAL_VALUE");
 
         let nowTs = now();
         let cooldownUntil: Int = 0;
@@ -113,8 +115,8 @@ contract VotingEscrow with Deployable {
     }
 
     receive(msg: Vote) {
-        require(context().value >= VOTE_FEE, "LOW_VOTE_FEE");
-        require(msg.lockedNfts > 0 || msg.lockedJettons > 0, "EMPTY_LOCK");
+        require(context().value >= VOTE_FEE + VOTE_LOCK, "LOW_VOTE_LOCK");
+        require(msg.lockedNfts > 0, "NFT_LOCK_REQUIRED");
         require(self.proposalCreator.exists(msg.proposalId), "UNKNOWN_PROPOSAL");
 
         let endAt = self.proposalEndAt.get(msg.proposalId)!!;

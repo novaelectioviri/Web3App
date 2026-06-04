@@ -11,6 +11,7 @@ import {
   ROUTES,
   VOTING_DURATION_SECONDS,
   VOTE_FEE,
+  VOTE_LOCK,
 } from './constants.js';
 import { initTelegramBridge } from './telegram.js';
 import {
@@ -131,6 +132,7 @@ async function refreshChainState() {
       nftCollectionActive: false,
       jettonActive: false,
     };
+    votingPower = { nftCount: 0, jettonBalance: 0 };
   }
 }
 
@@ -256,7 +258,7 @@ function renderDashboard() {
           <span class="pill active">+fees from votes</span>
         </div>
         <p class="text-xs" style="color: var(--hint)">
-          VOTE_FEE=${VOTE_FEE} TON, PROPOSAL_FEE=${PROPOSAL_FEE} TON, GAS_RESERVE=${GAS_RESERVE} TON
+          VOTE_FEE=${VOTE_FEE} TON, VOTE_LOCK=${VOTE_LOCK} TON, PROPOSAL_FEE=${PROPOSAL_FEE} TON
         </p>
       </div>
       <div class="card grid grid-cols-2 gap-2 text-sm">
@@ -287,7 +289,11 @@ function renderConnectControl() {
 
 function renderCreateProposal() {
   const cooldown = getCooldownInfo(state, walletAddress);
-  const canSubmit = walletAddress && cooldown.canCreate;
+  const canSubmit =
+    walletAddress &&
+    cooldown.canCreate &&
+    votingPower.nftCount > 0 &&
+    votingPower.jettonBalance > 0;
   return `
     <section class="space-y-4 py-2">
       <h1 class="text-2xl font-bold">Create Proposal</h1>
@@ -327,6 +333,7 @@ function renderCreateProposal() {
         </div>
         <div class="grid grid-cols-2 gap-2 text-xs" style="color: var(--hint)">
           <p>PROPOSAL_FEE: ${PROPOSAL_FEE} TON</p>
+          <p>Total tx: ${PROPOSAL_FEE} + transfer amount</p>
           <p>PROPOSAL_REFUND: ${PROPOSAL_REFUND} TON</p>
         </div>
         <button class="btn-primary" type="submit" ${canSubmit ? '' : 'disabled'}>Submit Proposal</button>
@@ -341,6 +348,17 @@ function renderActiveVotes() {
       const status = deriveStatus(proposal);
       const yes = yesPercent(proposal.yesVotes, proposal.noVotes);
       const timeLeft = secondsUntil(proposal.endAt);
+      const nowTs = Math.floor(Date.now() / 1000);
+      const totalVotes = proposal.yesVotes + proposal.noVotes;
+      const consensusReached =
+        totalVotes > 0 &&
+        proposal.voters >= MIN_QUORUM &&
+        yes >= CONSENSUS_PERCENT;
+      const canVote = status === 'Active' || status === 'Consensus';
+      const canExecute =
+        !proposal.executed &&
+        nowTs >= proposal.endAt &&
+        consensusReached;
       return `
         <article class="card space-y-3">
           <div class="flex items-start justify-between gap-3">
@@ -364,10 +382,10 @@ function renderActiveVotes() {
             <span>${timeLeft > 0 ? `⏱ ${formatDuration(timeLeft)}` : 'Deadline passed'}</span>
           </div>
           <div class="grid grid-cols-2 gap-2">
-            <button class="btn-secondary" data-action="vote" data-proposal="${proposal.id}" data-side="yes">Vote YES (+${VOTE_FEE} TON)</button>
-            <button class="btn-secondary" data-action="vote" data-proposal="${proposal.id}" data-side="no">Vote NO (+${VOTE_FEE} TON)</button>
+            <button class="btn-secondary" data-action="vote" data-proposal="${proposal.id}" data-side="yes" ${canVote ? '' : 'disabled'}>Vote YES (+${VOTE_FEE + VOTE_LOCK} TON)</button>
+            <button class="btn-secondary" data-action="vote" data-proposal="${proposal.id}" data-side="no" ${canVote ? '' : 'disabled'}>Vote NO (+${VOTE_FEE + VOTE_LOCK} TON)</button>
           </div>
-          <button class="btn-secondary w-full" data-action="execute" data-proposal="${proposal.id}">
+          <button class="btn-secondary w-full" data-action="execute" data-proposal="${proposal.id}" ${canExecute ? '' : 'disabled'}>
             Execute (if consensus and ended)
           </button>
         </article>
@@ -454,7 +472,7 @@ function renderVoteModal() {
           Proposal #${proposal.id}: ${escapeHtml(proposal.title)}
         </p>
         <p class="text-sm">
-          Choice: <b>${voteModal.side.toUpperCase()}</b> • Fee: <b>${VOTE_FEE} TON</b>
+          Choice: <b>${voteModal.side.toUpperCase()}</b> • Tx value: <b>${VOTE_FEE + VOTE_LOCK} TON</b>
         </p>
         <p class="text-xs" style="color: var(--hint)">
           Your NFT and Jetton voting assets will be marked as locked until claim phase.
@@ -642,6 +660,10 @@ async function handleCreateProposal() {
   const description = descInput.value.trim();
   const targetAddress = targetInput.value.trim();
   const amountTon = Number(amountInput.value || 0);
+  if (!Number.isFinite(amountTon) || amountTon < 0) {
+    toast('Amount must be non-negative');
+    return;
+  }
   if (!title || !description || !validateTargetField()) {
     toast('Fill all required fields');
     return;
@@ -662,7 +684,7 @@ async function handleCreateProposal() {
       nftProofCount: power.nftCount,
       jettonProofAmount: power.jettonBalance,
     });
-    await sendCreateProposalTx({ payloadBoc });
+    await sendCreateProposalTx({ payloadBoc, tonAmount: amountTon });
   } catch (error) {
     toast(explainError(error));
     return;
@@ -692,8 +714,8 @@ async function handleVote(proposalId, side) {
     return;
   }
   const power = await readVotingPower(walletAddress);
-  if (power.nftCount <= 0 && power.jettonBalance <= 0) {
-    toast('No voting assets detected');
+  if (power.nftCount <= 0) {
+    toast('Need at least 1 NFT to vote');
     return;
   }
   try {
@@ -794,20 +816,16 @@ function escapeHtml(value) {
 }
 
 async function initTonConnectBridge() {
-  try {
-    tonConnectUI = await getTonConnectUI();
-    tonConnectReady = true;
-    walletAddress = connectedAddress();
-    onWalletChange(async (address) => {
-      walletAddress = address;
-      await refreshChainState();
-      render();
-    });
-    void tonConnectUI.connectionRestored;
+  tonConnectUI = await getTonConnectUI();
+  tonConnectReady = true;
+  walletAddress = connectedAddress();
+  onWalletChange(async (address) => {
+    walletAddress = address;
+    await refreshChainState();
     render();
-  } catch (error) {
-    console.error('TonConnect init failed', error);
-  }
+  });
+  void tonConnectUI.connectionRestored;
+  render();
 }
 
 async function ensureTonConnectReady() {
@@ -820,6 +838,9 @@ async function ensureTonConnectReady() {
     });
   }
   await tonConnectInitPromise;
+  if (!tonConnectReady || !tonConnectUI) {
+    throw new Error('TonConnect is unavailable');
+  }
 }
 
 window.addEventListener('unhandledrejection', (event) => {

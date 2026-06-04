@@ -7,6 +7,23 @@ import {
 
 const CACHE_TTL_MS = 30_000;
 const cache = new Map();
+const FETCH_TIMEOUT_MS = 8_000;
+
+/**
+ * @param {string} url
+ * @returns {Promise<Response>}
+ */
+async function fetchWithTimeout(url) {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => {
+    controller.abort();
+  }, FETCH_TIMEOUT_MS);
+  try {
+    return await fetch(url, { signal: controller.signal });
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
 
 /**
  * @param {string} key
@@ -34,7 +51,7 @@ async function isActiveAddress(address) {
   }
   return withCache(`account:${address}`, async () => {
     try {
-      const response = await fetch(
+      const response = await fetchWithTimeout(
         `${TONAPI_BASE_URL}/blockchain/accounts/${encodeURIComponent(address)}`,
       );
       if (!response.ok) {
@@ -67,7 +84,7 @@ export async function readVotingPower(holderAddress) {
     let jettonBalance = 0;
 
     try {
-      const nftResp = await fetch(nftUrl);
+      const nftResp = await fetchWithTimeout(nftUrl);
       if (nftResp.ok) {
         const nftJson = await nftResp.json();
         const items = Array.isArray(nftJson.nft_items) ? nftJson.nft_items : [];
@@ -85,7 +102,7 @@ export async function readVotingPower(holderAddress) {
     }
 
     try {
-      const jettonResp = await fetch(jettonUrl);
+      const jettonResp = await fetchWithTimeout(jettonUrl);
       if (jettonResp.ok) {
         const jettonJson = await jettonResp.json();
         const balances = Array.isArray(jettonJson.balances)

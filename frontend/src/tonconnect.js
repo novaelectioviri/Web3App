@@ -1,4 +1,10 @@
-import { ESCROW_ADDRESS, NETWORK, PROPOSAL_FEE, VOTE_FEE } from './constants.js';
+import {
+  ESCROW_ADDRESS,
+  NETWORK,
+  PROPOSAL_FEE,
+  VOTE_FEE,
+  VOTE_LOCK,
+} from './constants.js';
 
 const manifestUrl = new URL(
   './tonconnect-manifest.json',
@@ -187,7 +193,8 @@ export async function buildClaimForPayload(data) {
 export async function sendCreateProposalTx(options = {}) {
   const escrowAddress = resolveEscrowAddress();
   const ui = await getTonConnectUI();
-  const amount = await toNanoSafe(PROPOSAL_FEE.toString());
+  const tonAmount = Math.max(0, Number(options.tonAmount ?? 0));
+  const amount = await toNanoSafe((PROPOSAL_FEE + tonAmount).toString());
   await ui.sendTransaction({
     validUntil: Math.floor(Date.now() / 1000) + 360,
     network: NETWORK === 'testnet' ? '-3' : undefined,
@@ -207,7 +214,7 @@ export async function sendCreateProposalTx(options = {}) {
 export async function sendVoteTx(options = {}) {
   const escrowAddress = resolveEscrowAddress();
   const ui = await getTonConnectUI();
-  const amount = await toNanoSafe(VOTE_FEE.toString());
+  const amount = await toNanoSafe((VOTE_FEE + VOTE_LOCK).toString());
   await ui.sendTransaction({
     validUntil: Math.floor(Date.now() / 1000) + 360,
     network: NETWORK === 'testnet' ? '-3' : undefined,

@@ -8,6 +8,7 @@ export const ROUTES = {
 };
 
 export const VOTE_FEE = 0.5;
+export const VOTE_LOCK = 0.15;
 export const PROPOSAL_FEE = 2.0;
 export const PROPOSAL_REFUND = 1.0;
 export const VOTING_DURATION_SECONDS = 75600;

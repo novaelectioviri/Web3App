@@ -42,7 +42,7 @@ describe('VotingEscrow', () => {
   it('creates proposal with cooldown and proposal fee', async () => {
     const result = await escrow.send(
       proposer.getSender(),
-      { value: toNano('2.1') },
+      { value: toNano('2.5') },
       {
         $$type: 'CreateProposal',
         queryId: 1n,
@@ -70,7 +70,7 @@ describe('VotingEscrow', () => {
   it('rejects proposal during active cooldown', async () => {
     await escrow.send(
       proposer.getSender(),
-      { value: toNano('2.2') },
+      { value: toNano('2.3') },
       {
         $$type: 'CreateProposal',
         queryId: 2n,
@@ -84,7 +84,7 @@ describe('VotingEscrow', () => {
 
     const second = await escrow.send(
       proposer.getSender(),
-      { value: toNano('2.2') },
+      { value: toNano('2.3') },
       {
         $$type: 'CreateProposal',
         queryId: 3n,
@@ -106,7 +106,7 @@ describe('VotingEscrow', () => {
   it('collects vote fees and prevents duplicate voting', async () => {
     await escrow.send(
       proposer.getSender(),
-      { value: toNano('2.3') },
+      { value: toNano('2.5') },
       {
         $$type: 'CreateProposal',
         queryId: 10n,
@@ -120,7 +120,7 @@ describe('VotingEscrow', () => {
 
     await escrow.send(
       voter1.getSender(),
-      { value: toNano('0.7') },
+      { value: toNano('0.8') },
       {
         $$type: 'Vote',
         queryId: 11n,
@@ -133,7 +133,7 @@ describe('VotingEscrow', () => {
 
     const duplicate = await escrow.send(
       voter1.getSender(),
-      { value: toNano('0.7') },
+      { value: toNano('0.8') },
       {
         $$type: 'Vote',
         queryId: 12n,
@@ -172,7 +172,7 @@ describe('VotingEscrow', () => {
     for (const voter of [voter1, voter2, voter3]) {
       await escrow.send(
         voter.getSender(),
-        { value: toNano('0.8') },
+        { value: toNano('0.9') },
         {
           $$type: 'Vote',
           queryId: BigInt(voter === voter1 ? 31 : voter === voter2 ? 32 : 33),
@@ -226,7 +226,7 @@ describe('VotingEscrow', () => {
 
     await escrow.send(
       voter1.getSender(),
-      { value: toNano('0.7') },
+      { value: toNano('0.9') },
       {
         $$type: 'Vote',
         queryId: 301n,
@@ -238,7 +238,7 @@ describe('VotingEscrow', () => {
     );
     await escrow.send(
       voter2.getSender(),
-      { value: toNano('0.7') },
+      { value: toNano('0.9') },
       {
         $$type: 'Vote',
         queryId: 302n,
@@ -280,5 +280,62 @@ describe('VotingEscrow', () => {
     expect(after < before).toBe(true);
     expect(await escrow.getProposalPendingClaims(1n)).toBe(1n);
     expect(await escrow.getVoteClaimed(1n, voter1.address)).toBe(1n);
+  });
+
+  it('rejects proposal when transfer amount is not funded', async () => {
+    const result = await escrow.send(
+      proposer.getSender(),
+      { value: toNano('2.1') },
+      {
+        $$type: 'CreateProposal',
+        queryId: 401n,
+        targetAddress: target.address,
+        tonAmount: toNano('0.5'),
+        targetPayload: null,
+        nftProofCount: 1n,
+        jettonProofAmount: toNano('4'),
+      },
+    );
+
+    expect(result.transactions).toHaveTransaction({
+      from: proposer.address,
+      to: escrow.address,
+      success: false,
+    });
+  });
+
+  it('rejects vote when nft lock is missing', async () => {
+    await escrow.send(
+      proposer.getSender(),
+      { value: toNano('2.3') },
+      {
+        $$type: 'CreateProposal',
+        queryId: 402n,
+        targetAddress: target.address,
+        tonAmount: toNano('0.1'),
+        targetPayload: null,
+        nftProofCount: 1n,
+        jettonProofAmount: toNano('6'),
+      },
+    );
+
+    const result = await escrow.send(
+      voter1.getSender(),
+      { value: toNano('0.9') },
+      {
+        $$type: 'Vote',
+        queryId: 403n,
+        proposalId: 1n,
+        support: 1n,
+        lockedNfts: 0n,
+        lockedJettons: toNano('2'),
+      },
+    );
+
+    expect(result.transactions).toHaveTransaction({
+      from: voter1.address,
+      to: escrow.address,
+      success: false,
+    });
   });
 });

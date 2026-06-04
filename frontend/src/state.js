@@ -3,8 +3,11 @@ import {
   GAS_RESERVE,
   MAX_CLAIM_BONUS,
   MIN_QUORUM,
+  PROPOSAL_FEE,
+  PROPOSAL_REFUND,
   STORAGE_KEY,
   VOTING_DURATION_SECONDS,
+  VOTE_FEE,
 } from './constants.js';
 import { deriveStatus, yesPercent } from './utils.js';
 
@@ -173,6 +176,7 @@ export function createProposal(state, data) {
 
   state.proposals.unshift(proposal);
   state.lastProposalByAddress[data.creator] = now;
+  state.feeBalance += PROPOSAL_FEE;
   return proposal;
 }
 
@@ -206,7 +210,7 @@ export function castVote(state, proposalId, voter, vote, nftLocked, jettonLocked
   } else {
     proposal.noVotes += 1;
   }
-  state.feeBalance += 0.5;
+  state.feeBalance += VOTE_FEE;
 }
 
 /**
@@ -236,7 +240,7 @@ export function executeProposal(state, proposalId) {
   }
 
   proposal.executed = true;
-  state.feeBalance = Math.max(0, state.feeBalance - GAS_RESERVE);
+  state.feeBalance = Math.max(0, state.feeBalance - GAS_RESERVE - PROPOSAL_REFUND);
 }
 
 /**
@@ -284,6 +288,7 @@ export function claimFor(state, proposalId, caller, voter) {
   }
 
   voterState.claimed = true;
+  state.feeBalance = Math.max(0, Number((state.feeBalance - GAS_RESERVE).toFixed(4)));
   proposal.claimedAll = countPendingClaims(proposal) === 0;
 
   return {
