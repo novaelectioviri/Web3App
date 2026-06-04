@@ -64,6 +64,10 @@ let votingPower = {
   jettonBalance: 0,
 };
 let voteModal = null;
+let initialChainLoaded = false;
+let tonConnectUI = null;
+let tonConnectReady = false;
+let tonConnectInitPromise = null;
 
 const routes = {
   [ROUTES.dashboard]: renderDashboard,
@@ -73,22 +77,30 @@ const routes = {
 };
 
 initTelegramBridge();
-const tonConnectUI = getTonConnectUI();
-walletAddress = connectedAddress();
-onWalletChange(async (address) => {
-  walletAddress = address;
-  await refreshChainState();
-  render();
-});
 
 setupNavigation();
+render();
 void refreshChainState().finally(() => {
+  initialChainLoaded = true;
   render();
-  window.setInterval(() => render(), 1000);
 });
+window.setInterval(() => {
+  render();
+}, 60_000);
+window.setInterval(() => {
+  void refreshChainState().then(() => {
+    initialChainLoaded = true;
+    render();
+  });
+}, 120_000);
 
 window.addEventListener('hashchange', () => {
   render();
+});
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') {
+    void refreshChainState().then(() => render());
+  }
 });
 
 /**
@@ -106,11 +118,19 @@ function setupNavigation() {
 }
 
 async function refreshChainState() {
-  contractReadiness = await readContractReadiness();
-  if (walletAddress) {
-    votingPower = await readVotingPower(walletAddress);
-  } else {
-    votingPower = { nftCount: 0, jettonBalance: 0 };
+  try {
+    contractReadiness = await readContractReadiness();
+    if (walletAddress) {
+      votingPower = await readVotingPower(walletAddress);
+    } else {
+      votingPower = { nftCount: 0, jettonBalance: 0 };
+    }
+  } catch {
+    contractReadiness = {
+      escrowActive: false,
+      nftCollectionActive: false,
+      jettonActive: false,
+    };
   }
 }
 
@@ -131,16 +151,18 @@ function render() {
     </div>
   `;
   bindGlobalActions();
-  const connectRoot = document.querySelector('#ton-connect-button');
-  if (connectRoot) {
-    tonConnectUI.uiOptions = {
-      buttonRootId: 'ton-connect-button',
-      uiPreferences: { theme: 'SYSTEM' },
-    };
-  } else {
-    tonConnectUI.uiOptions = {
-      uiPreferences: { theme: 'SYSTEM' },
-    };
+  if (tonConnectUI && tonConnectReady) {
+    const connectRoot = document.querySelector('#ton-connect-button');
+    if (connectRoot) {
+      tonConnectUI.uiOptions = {
+        buttonRootId: 'ton-connect-button',
+        uiPreferences: { theme: 'SYSTEM' },
+      };
+    } else {
+      tonConnectUI.uiOptions = {
+        uiPreferences: { theme: 'SYSTEM' },
+      };
+    }
   }
 }
 
@@ -206,7 +228,7 @@ function renderDashboard() {
     <section class="space-y-4 py-2">
       <div class="flex items-center justify-between gap-3">
         <h1 class="text-2xl font-bold">TON Voting</h1>
-        <div id="ton-connect-button"></div>
+        ${renderConnectControl()}
       </div>
       <div class="card space-y-2">
         <p class="text-xs" style="color: var(--hint)">Wallet</p>
@@ -214,6 +236,7 @@ function renderDashboard() {
           <span class="mono text-sm">${walletShort()}</span>
           <button class="btn-secondary" data-action="refresh-chain">Refresh RPC</button>
         </div>
+        ${initialChainLoaded ? '' : `<p class="text-xs" style="color: var(--hint)">Loading on-chain state...</p>`}
         ${renderNetworkBadge()}
       </div>
       <div class="card grid grid-cols-2 gap-3">
@@ -253,6 +276,13 @@ function renderDashboard() {
       </div>
     </section>
   `;
+}
+
+function renderConnectControl() {
+  if (tonConnectReady) {
+    return '<div id="ton-connect-button"></div>';
+  }
+  return '<button class="btn-secondary" data-action="init-connect">Connect</button>';
 }
 
 function renderCreateProposal() {
@@ -438,6 +468,13 @@ function renderVoteModal() {
 }
 
 function bindGlobalActions() {
+  document.querySelectorAll('[data-action="init-connect"]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      await ensureTonConnectReady();
+      render();
+    });
+  });
+
   const refreshBtn = document.querySelector('[data-action="refresh-chain"]');
   refreshBtn?.addEventListener('click', async () => {
     await refreshChainState();
@@ -562,6 +599,8 @@ function closeVoteModal() {
 }
 
 async function handleCreateProposal() {
+  await ensureTonConnectReady();
+  walletAddress = connectedAddress();
   if (!walletAddress) {
     toast('Connect wallet first');
     return;
@@ -633,6 +672,8 @@ async function handleCreateProposal() {
  * @param {"yes" | "no"} side
  */
 async function handleVote(proposalId, side) {
+  await ensureTonConnectReady();
+  walletAddress = connectedAddress();
   if (!walletAddress) {
     toast('Connect wallet first');
     return;
@@ -670,6 +711,7 @@ async function handleVote(proposalId, side) {
  * @param {number} proposalId
  */
 async function handleExecute(proposalId) {
+  await ensureTonConnectReady();
   try {
     const payloadBoc = await buildExecutePayload(proposalId);
     await sendExecuteTx({ payloadBoc });
@@ -687,6 +729,8 @@ async function handleExecute(proposalId) {
  * @param {string} voter
  */
 async function handleClaim(proposalId, voter) {
+  await ensureTonConnectReady();
+  walletAddress = connectedAddress();
   if (!walletAddress) {
     toast('Connect wallet first');
     return;
@@ -736,4 +780,36 @@ function escapeHtml(value) {
     .replaceAll("'", '&#39;');
 }
 
-void tonConnectUI.connectionRestored;
+async function initTonConnectBridge() {
+  try {
+    tonConnectUI = await getTonConnectUI();
+    tonConnectReady = true;
+    walletAddress = connectedAddress();
+    onWalletChange(async (address) => {
+      walletAddress = address;
+      await refreshChainState();
+      render();
+    });
+    void tonConnectUI.connectionRestored;
+    render();
+  } catch (error) {
+    console.error('TonConnect init failed', error);
+  }
+}
+
+async function ensureTonConnectReady() {
+  if (tonConnectReady) {
+    return;
+  }
+  if (!tonConnectInitPromise) {
+    tonConnectInitPromise = initTonConnectBridge().finally(() => {
+      tonConnectInitPromise = null;
+    });
+  }
+  await tonConnectInitPromise;
+}
+
+window.addEventListener('unhandledrejection', (event) => {
+  const message = explainError(event.reason);
+  toast(`Async error: ${message}`);
+});

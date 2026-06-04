@@ -1,5 +1,3 @@
-import { toNano } from '@ton/core';
-import { TonConnectUI } from '@tonconnect/ui';
 import { ESCROW_ADDRESS, NETWORK, PROPOSAL_FEE, VOTE_FEE } from './constants.js';
 
 const manifestUrl = new URL(
@@ -7,20 +5,65 @@ const manifestUrl = new URL(
   window.location.href.split('#')[0],
 ).toString();
 
-/** @type {TonConnectUI | null} */
+/** @type {any | null} */
 let tonConnectUI = null;
 
-/**
- * @returns {TonConnectUI}
- */
-export function getTonConnectUI() {
-  if (!tonConnectUI) {
-    tonConnectUI = new TonConnectUI({
-      manifestUrl,
-      uiPreferences: {
-        theme: 'SYSTEM',
-      },
+/** @type {Promise<any> | null} */
+let tonConnectLoadingPromise = null;
+
+/** @type {Promise<typeof import('@ton/core')> | null} */
+let tonCorePromise = null;
+
+/** @type {Promise<void> | null} */
+let bufferPolyfillPromise = null;
+
+function ensureBufferPolyfill() {
+  if (!bufferPolyfillPromise) {
+    bufferPolyfillPromise = import('buffer').then(({ Buffer }) => {
+      if (!globalThis.Buffer) {
+        globalThis.Buffer = Buffer;
+      }
     });
+  }
+  return bufferPolyfillPromise;
+}
+
+async function loadTonCore() {
+  await ensureBufferPolyfill();
+  if (!tonCorePromise) {
+    tonCorePromise = import('@ton/core');
+  }
+  return tonCorePromise;
+}
+
+function toNanoSafe(value) {
+  return loadTonCore().then(({ toNano }) => toNano(value).toString());
+}
+
+function resolveEscrowAddress() {
+  if (!ESCROW_ADDRESS) {
+    throw new Error('VITE_VOTING_ESCROW_ADDRESS не настроен');
+  }
+  return ESCROW_ADDRESS;
+}
+
+/**
+ * @returns {Promise<any>}
+ */
+export async function getTonConnectUI() {
+  if (!tonConnectUI) {
+    if (!tonConnectLoadingPromise) {
+      tonConnectLoadingPromise = import('@tonconnect/ui').then(({ TonConnectUI }) => {
+        tonConnectUI = new TonConnectUI({
+          manifestUrl,
+          uiPreferences: {
+            theme: 'SYSTEM',
+          },
+        });
+        return tonConnectUI;
+      });
+    }
+    await tonConnectLoadingPromise;
   }
   return tonConnectUI;
 }
@@ -29,7 +72,7 @@ export function getTonConnectUI() {
  * @returns {string}
  */
 export function connectedAddress() {
-  const wallet = getTonConnectUI().wallet;
+  const wallet = tonConnectUI?.wallet;
   return wallet?.account?.address ?? '';
 }
 
@@ -37,16 +80,13 @@ export function connectedAddress() {
  * @param {(address: string) => void} callback
  */
 export function onWalletChange(callback) {
-  const ui = getTonConnectUI();
+  if (!tonConnectUI) {
+    return;
+  }
+  const ui = tonConnectUI;
   ui.onStatusChange((wallet) => {
     callback(wallet?.account?.address ?? '');
   });
-}
-
-function mustHaveEscrowAddress() {
-  if (!ESCROW_ADDRESS) {
-    throw new Error('VITE_VOTING_ESCROW_ADDRESS не настроен');
-  }
 }
 
 /**
@@ -62,7 +102,7 @@ function toQueryId(value) {
  * @returns {Promise<import('@ton/core').Address>}
  */
 async function parseAnyAddress(value) {
-  const { Address } = await import('@ton/core');
+  const { Address } = await loadTonCore();
   try {
     return Address.parseFriendly(value).address;
   } catch {
@@ -82,7 +122,7 @@ async function parseAnyAddress(value) {
  * @returns {Promise<string>}
  */
 export async function buildCreateProposalPayload(data) {
-  const { beginCell, toNano } = await import('@ton/core');
+  const { beginCell, toNano } = await loadTonCore();
   const payload = beginCell()
     .storeUint(0x43525052, 32)
     .storeUint(toQueryId(1), 64)
@@ -100,7 +140,7 @@ export async function buildCreateProposalPayload(data) {
  * @returns {Promise<string>}
  */
 export async function buildVotePayload(data) {
-  const { beginCell, toNano } = await import('@ton/core');
+  const { beginCell, toNano } = await loadTonCore();
   const payload = beginCell()
     .storeUint(0x564f5445, 32)
     .storeUint(toQueryId(2), 64)
@@ -117,7 +157,7 @@ export async function buildVotePayload(data) {
  * @returns {Promise<string>}
  */
 export async function buildExecutePayload(proposalId) {
-  const { beginCell } = await import('@ton/core');
+  const { beginCell } = await loadTonCore();
   const payload = beginCell()
     .storeUint(0x45584543, 32)
     .storeUint(toQueryId(3), 64)
@@ -131,7 +171,7 @@ export async function buildExecutePayload(proposalId) {
  * @returns {Promise<string>}
  */
 export async function buildClaimForPayload(data) {
-  const { beginCell } = await import('@ton/core');
+  const { beginCell } = await loadTonCore();
   const payload = beginCell()
     .storeUint(0x434c4d46, 32)
     .storeUint(toQueryId(4), 64)
@@ -145,15 +185,16 @@ export async function buildClaimForPayload(data) {
  * @param {{ payloadBoc?: string }} [options]
  */
 export async function sendCreateProposalTx(options = {}) {
-  mustHaveEscrowAddress();
-  const ui = getTonConnectUI();
+  const escrowAddress = resolveEscrowAddress();
+  const ui = await getTonConnectUI();
+  const amount = await toNanoSafe(PROPOSAL_FEE.toString());
   await ui.sendTransaction({
     validUntil: Math.floor(Date.now() / 1000) + 360,
     network: NETWORK === 'testnet' ? '-3' : undefined,
     messages: [
       {
-        address: ESCROW_ADDRESS,
-        amount: toNano(PROPOSAL_FEE.toString()).toString(),
+        address: escrowAddress,
+        amount,
         payload: options.payloadBoc,
       },
     ],
@@ -164,15 +205,16 @@ export async function sendCreateProposalTx(options = {}) {
  * @param {{ payloadBoc?: string }} [options]
  */
 export async function sendVoteTx(options = {}) {
-  mustHaveEscrowAddress();
-  const ui = getTonConnectUI();
+  const escrowAddress = resolveEscrowAddress();
+  const ui = await getTonConnectUI();
+  const amount = await toNanoSafe(VOTE_FEE.toString());
   await ui.sendTransaction({
     validUntil: Math.floor(Date.now() / 1000) + 360,
     network: NETWORK === 'testnet' ? '-3' : undefined,
     messages: [
       {
-        address: ESCROW_ADDRESS,
-        amount: toNano(VOTE_FEE.toString()).toString(),
+        address: escrowAddress,
+        amount,
         payload: options.payloadBoc,
       },
     ],
@@ -183,15 +225,16 @@ export async function sendVoteTx(options = {}) {
  * @param {{ payloadBoc?: string }} [options]
  */
 export async function sendExecuteTx(options = {}) {
-  mustHaveEscrowAddress();
-  const ui = getTonConnectUI();
+  const escrowAddress = resolveEscrowAddress();
+  const ui = await getTonConnectUI();
+  const amount = await toNanoSafe('0.3');
   await ui.sendTransaction({
     validUntil: Math.floor(Date.now() / 1000) + 360,
     network: NETWORK === 'testnet' ? '-3' : undefined,
     messages: [
       {
-        address: ESCROW_ADDRESS,
-        amount: toNano('0.3').toString(),
+        address: escrowAddress,
+        amount,
         payload: options.payloadBoc,
       },
     ],
@@ -202,15 +245,16 @@ export async function sendExecuteTx(options = {}) {
  * @param {string} claimPayloadBoc
  */
 export async function sendClaimTx(claimPayloadBoc) {
-  mustHaveEscrowAddress();
-  const ui = getTonConnectUI();
+  const escrowAddress = resolveEscrowAddress();
+  const ui = await getTonConnectUI();
+  const amount = await toNanoSafe('0.2');
   await ui.sendTransaction({
     validUntil: Math.floor(Date.now() / 1000) + 360,
     network: NETWORK === 'testnet' ? '-3' : undefined,
     messages: [
       {
-        address: ESCROW_ADDRESS,
-        amount: toNano('0.2').toString(),
+        address: escrowAddress,
+        amount,
         payload: claimPayloadBoc,
       },
     ],

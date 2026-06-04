@@ -1,4 +1,3 @@
-import { Address } from '@ton/core';
 import { CONSENSUS_PERCENT, MIN_QUORUM } from './constants.js';
 
 /**
@@ -29,16 +28,7 @@ export function secondsUntil(timestamp) {
  */
 export function validateTonAddress(address) {
   const trimmed = address.trim();
-  if (!/^(EQ|UQ)[A-Za-z0-9_-]{46}$/.test(trimmed)) {
-    return false;
-  }
-
-  try {
-    Address.parseFriendly(trimmed);
-    return true;
-  } catch {
-    return false;
-  }
+  return /^(EQ|UQ)[A-Za-z0-9_-]{46}$/.test(trimmed);
 }
 
 /**
