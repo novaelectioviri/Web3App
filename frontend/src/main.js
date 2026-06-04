@@ -470,8 +470,7 @@ function renderVoteModal() {
 function bindGlobalActions() {
   document.querySelectorAll('[data-action="init-connect"]').forEach((button) => {
     button.addEventListener('click', async () => {
-      await ensureTonConnectReady();
-      render();
+      await handleConnectClick();
     });
   });
 
@@ -557,6 +556,20 @@ function bindGlobalActions() {
       void handleClaim(proposalId, voter);
     });
   });
+}
+
+async function handleConnectClick() {
+  try {
+    await ensureTonConnectReady();
+    walletAddress = connectedAddress();
+    render();
+
+    if (!walletAddress && tonConnectUI) {
+      await tonConnectUI.openModal();
+    }
+  } catch (error) {
+    toast(explainError(error));
+  }
 }
 
 function validateTargetField() {
