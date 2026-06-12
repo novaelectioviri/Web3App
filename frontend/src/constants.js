@@ -28,3 +28,10 @@ export const JETTON_MASTER_ADDRESS =
   import.meta.env.VITE_JETTON_MASTER_ADDRESS ?? '';
 export const TONAPI_BASE_URL =
   import.meta.env.VITE_TONAPI_BASE_URL ?? 'https://tonapi.io/v2';
+
+export const TONCONNECT_MANIFEST_URL =
+  import.meta.env.VITE_TONCONNECT_MANIFEST_URL ?? '';
+
+export const LEGACY_VOTE_ENABLED =
+  String(import.meta.env.VITE_LEGACY_VOTE_ENABLED ?? '').toLowerCase() ===
+  'true';

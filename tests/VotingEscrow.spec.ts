@@ -1,5 +1,5 @@
 import { Blockchain, SandboxContract, TreasuryContract } from '@ton/sandbox';
-import { Cell, toNano } from '@ton/core';
+import { beginCell, Cell, toNano } from '@ton/core';
 import { VotingEscrow } from '../wrappers/VotingEscrow';
 import '@ton/test-utils';
 
@@ -336,6 +336,225 @@ describe('VotingEscrow', () => {
       from: voter1.address,
       to: escrow.address,
       success: false,
+    });
+  });
+
+  it('supports real on-chain lock via NFT + jetton notifications', async () => {
+    await escrow.send(
+      owner.getSender(),
+      { value: toNano('0.1') },
+      {
+        $$type: 'ConfigureAssets',
+        queryId: 500n,
+        jettonWallet: owner.address,
+      },
+    );
+
+    await escrow.send(
+      proposer.getSender(),
+      { value: toNano('2.4') },
+      {
+        $$type: 'CreateProposal',
+        queryId: 501n,
+        targetAddress: target.address,
+        tonAmount: toNano('0.2'),
+        targetPayload: null,
+        nftProofCount: 1n,
+        jettonProofAmount: toNano('5'),
+      },
+    );
+
+    const voteForwardPayload = beginCell()
+      .storeUint(0x564f5445, 32)
+      .storeUint(1, 32)
+      .storeUint(1, 1)
+      .storeAddress(voter1.address)
+      .storeUint(1, 16)
+      .endCell()
+      .beginParse();
+
+    await escrow.send(
+      voter1.getSender(),
+      { value: toNano('0.2') },
+      {
+        $$type: 'NftOwnershipAssigned',
+        queryId: 502n,
+        prevOwner: voter1.address,
+        forwardPayload: voteForwardPayload,
+      },
+    );
+
+    const jettonForwardPayload = beginCell()
+      .storeUint(0x564f5445, 32)
+      .storeUint(1, 32)
+      .storeUint(1, 1)
+      .storeAddress(voter1.address)
+      .endCell()
+      .beginParse();
+
+    const jettonLock = await escrow.send(
+      owner.getSender(),
+      { value: toNano('0.2') },
+      {
+        $$type: 'JettonTransferNotification',
+        queryId: 503n,
+        amount: toNano('2'),
+        sender: voter1.address,
+        forwardPayload: jettonForwardPayload,
+      },
+    );
+    expect(jettonLock.transactions).toHaveTransaction({
+      from: owner.address,
+      to: escrow.address,
+      success: true,
+    });
+
+    expect(await escrow.getProposalVoters(1n)).toBe(1n);
+    expect(await escrow.getProposalYesVotes(1n)).toBe(1n);
+    expect(await escrow.getFeeBalance()).toBe(toNano('2.5'));
+  });
+
+  it('does not count vote after NFT lock only', async () => {
+    await escrow.send(
+      owner.getSender(),
+      { value: toNano('0.1') },
+      {
+        $$type: 'ConfigureAssets',
+        queryId: 505n,
+        jettonWallet: owner.address,
+      },
+    );
+
+    await escrow.send(
+      proposer.getSender(),
+      { value: toNano('2.4') },
+      {
+        $$type: 'CreateProposal',
+        queryId: 506n,
+        targetAddress: target.address,
+        tonAmount: toNano('0.2'),
+        targetPayload: null,
+        nftProofCount: 1n,
+        jettonProofAmount: toNano('5'),
+      },
+    );
+
+    const voteForwardPayload = beginCell()
+      .storeUint(0x564f5445, 32)
+      .storeUint(1, 32)
+      .storeUint(1, 1)
+      .storeAddress(voter1.address)
+      .storeUint(1, 16)
+      .endCell()
+      .beginParse();
+
+    const nftOnlyLock = await escrow.send(
+      voter1.getSender(),
+      { value: toNano('0.2') },
+      {
+        $$type: 'NftOwnershipAssigned',
+        queryId: 507n,
+        prevOwner: voter1.address,
+        forwardPayload: voteForwardPayload,
+      },
+    );
+
+    expect(nftOnlyLock.transactions).toHaveTransaction({
+      from: voter1.address,
+      to: escrow.address,
+      success: true,
+    });
+    expect(await escrow.getProposalVoters(1n)).toBe(0n);
+    expect(await escrow.getProposalYesVotes(1n)).toBe(0n);
+  });
+
+  it('claim_for returns NFT and jetton transfers in lock mode', async () => {
+    await escrow.send(
+      owner.getSender(),
+      { value: toNano('0.1') },
+      {
+        $$type: 'ConfigureAssets',
+        queryId: 510n,
+        jettonWallet: owner.address,
+      },
+    );
+
+    await escrow.send(
+      proposer.getSender(),
+      { value: toNano('2.3') },
+      {
+        $$type: 'CreateProposal',
+        queryId: 511n,
+        targetAddress: target.address,
+        tonAmount: toNano('0.1'),
+        targetPayload: null,
+        nftProofCount: 1n,
+        jettonProofAmount: toNano('3'),
+      },
+    );
+
+    const voteForwardPayload = beginCell()
+      .storeUint(0x564f5445, 32)
+      .storeUint(1, 32)
+      .storeUint(1, 1)
+      .storeAddress(voter1.address)
+      .storeUint(1, 16)
+      .endCell()
+      .beginParse();
+
+    await escrow.send(
+      voter1.getSender(),
+      { value: toNano('0.2') },
+      {
+        $$type: 'NftOwnershipAssigned',
+        queryId: 512n,
+        prevOwner: voter1.address,
+        forwardPayload: voteForwardPayload,
+      },
+    );
+
+    const jettonForwardPayload = beginCell()
+      .storeUint(0x564f5445, 32)
+      .storeUint(1, 32)
+      .storeUint(1, 1)
+      .storeAddress(voter1.address)
+      .endCell()
+      .beginParse();
+
+    await escrow.send(
+      owner.getSender(),
+      { value: toNano('0.2') },
+      {
+        $$type: 'JettonTransferNotification',
+        queryId: 513n,
+        amount: toNano('1'),
+        sender: voter1.address,
+        forwardPayload: jettonForwardPayload,
+      },
+    );
+
+    blockchain.now = Number((await escrow.getProposalEndAt(1n))!) + 1;
+
+    const claimResult = await escrow.send(
+      claimer.getSender(),
+      { value: toNano('0.5') },
+      {
+        $$type: 'ClaimFor',
+        queryId: 514n,
+        proposalId: 1n,
+        voter: voter1.address,
+      },
+    );
+
+    expect(claimResult.transactions).toHaveTransaction({
+      from: escrow.address,
+      to: voter1.address,
+      success: true,
+    });
+    expect(claimResult.transactions).toHaveTransaction({
+      from: escrow.address,
+      to: owner.address,
+      success: true,
     });
   });
 });
