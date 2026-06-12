@@ -28,6 +28,43 @@ message(0x434c4d46) ClaimFor {
     voter: Address;
 }
 
+message(0x43464741) ConfigureAssets {
+    queryId: Int as uint64;
+    jettonWallet: Address;
+}
+
+message(0x05138d91) NftOwnershipAssigned {
+    queryId: Int as uint64;
+    prevOwner: Address;
+    forwardPayload: Slice as remaining;
+}
+
+message(0x7362d09c) JettonTransferNotification {
+    queryId: Int as uint64;
+    amount: Int as coins;
+    sender: Address;
+    forwardPayload: Slice as remaining;
+}
+
+message(0x5fcc3d14) NftTransfer {
+    queryId: Int as uint64;
+    newOwner: Address;
+    responseDestination: Address;
+    customPayload: Cell?;
+    forwardAmount: Int as coins;
+    forwardPayload: Slice as remaining;
+}
+
+message(0x0f8a7ea5) JettonTransfer {
+    queryId: Int as uint64;
+    amount: Int as coins;
+    destination: Address;
+    responseDestination: Address;
+    customPayload: Cell?;
+    forwardTonAmount: Int as coins;
+    forwardPayload: Slice as remaining;
+}
+
 const VOTE_FEE: Int = ton("0.5");
 const PROPOSAL_FEE: Int = ton("2.0");
 const PROPOSAL_REFUND: Int = ton("1.0");
@@ -37,10 +74,13 @@ const MIN_QUORUM: Int = 3;
 const MAX_CLAIM_BONUS: Int = ton("0.3");
 const GAS_RESERVE: Int = ton("0.15");
 const VOTE_LOCK: Int = GAS_RESERVE;
+const NFT_RETURN_GAS: Int = ton("0.05");
+const JETTON_RETURN_GAS: Int = ton("0.05");
 const CLAIM_RELEASE_OPCODE: Int = 0x434c4149;
 
 contract VotingEscrow with Deployable {
     owner: Address;
+    jettonWallet: Address;
     feeBalance: Int as coins;
     nextProposalId: Int as uint32;
     reentryLock: Int as uint1;
@@ -65,14 +105,28 @@ contract VotingEscrow with Deployable {
     voteClaimedByKey: map<Int, Int as uint1>;
     voteNftLockedByKey: map<Int, Int as uint16>;
     voteJettonLockedByKey: map<Int, Int as coins>;
+    voteNftAddressByKey: map<Int, Address>;
     voteOwnerByKey: map<Int, Address>;
     voteProposalByKey: map<Int, Int as uint32>;
+    voteSideByKey: map<Int, Int as uint1>;
+
+    nftLockCountByKey: map<Int, Int as uint16>;
+    jettonLockByKey: map<Int, Int as coins>;
+    pendingSupportByKey: map<Int, Int as uint1>;
+    pendingJettonSenderByKey: map<Int, Address>;
+    pendingReadyByKey: map<Int, Int as uint1>;
 
     init(owner: Address) {
         self.owner = owner;
+        self.jettonWallet = owner;
         self.feeBalance = 0;
         self.nextProposalId = 1;
         self.reentryLock = 0;
+    }
+
+    receive(msg: ConfigureAssets) {
+        require(sender() == self.owner, "NOT_OWNER");
+        self.jettonWallet = msg.jettonWallet;
     }
 
     receive(msg: CreateProposal) {
@@ -115,37 +169,14 @@ contract VotingEscrow with Deployable {
     }
 
     receive(msg: Vote) {
-        require(context().value >= VOTE_FEE + VOTE_LOCK, "LOW_VOTE_LOCK");
-        require(msg.lockedNfts > 0, "NFT_LOCK_REQUIRED");
-        require(self.proposalCreator.exists(msg.proposalId), "UNKNOWN_PROPOSAL");
-
-        let endAt = self.proposalEndAt.get(msg.proposalId)!!;
-        require(now() < endAt, "VOTING_ENDED");
-
-        let key = makeVoteKey(msg.proposalId, sender());
-        require(!self.voteChoiceByKey.exists(key), "ALREADY_VOTED");
-
-        let yesVotes = self.proposalYesVotes.get(msg.proposalId)!!;
-        let noVotes = self.proposalNoVotes.get(msg.proposalId)!!;
-        let voters = self.proposalVoters.get(msg.proposalId)!!;
-        let pendingClaims = self.proposalPendingClaims.get(msg.proposalId)!!;
-
-        if (msg.support == 1) {
-            self.proposalYesVotes.set(msg.proposalId, yesVotes + 1);
-        } else {
-            self.proposalNoVotes.set(msg.proposalId, noVotes + 1);
-        }
-        self.proposalVoters.set(msg.proposalId, voters + 1);
-        self.proposalPendingClaims.set(msg.proposalId, pendingClaims + 1);
-
-        self.voteChoiceByKey.set(key, msg.support);
-        self.voteClaimedByKey.set(key, 0);
-        self.voteNftLockedByKey.set(key, msg.lockedNfts);
-        self.voteJettonLockedByKey.set(key, msg.lockedJettons);
-        self.voteOwnerByKey.set(key, sender());
-        self.voteProposalByKey.set(key, msg.proposalId);
-
-        self.feeBalance = safeAdd(self.feeBalance, VOTE_FEE);
+        self.castVoteInternal(
+            msg.proposalId,
+            sender(),
+            msg.support,
+            msg.lockedNfts,
+            msg.lockedJettons,
+            context().value >= VOTE_FEE + VOTE_LOCK
+        );
     }
 
     receive(msg: ExecuteProposal) {
@@ -194,6 +225,53 @@ contract VotingEscrow with Deployable {
         self.reentryLock = 0;
     }
 
+    receive(msg: NftOwnershipAssigned) {
+        let fwd = msg.forwardPayload;
+        let op = fwd.loadUint(32);
+        require(op == 0x564f5445, "NFT_BAD_PAYLOAD");
+
+        let proposalId = fwd.loadUint(32);
+        let support = fwd.loadUint(1);
+        let voter = fwd.loadAddress();
+        let nftCount = fwd.loadUint(16);
+
+        let lockKey = makeVoteKey(proposalId, voter);
+        require(!self.voteChoiceByKey.exists(lockKey), "ALREADY_VOTED");
+        require(voter == sender() || msg.prevOwner == voter, "NFT_OWNER_MISMATCH");
+
+        let existing = 0;
+        if (self.nftLockCountByKey.exists(lockKey)) {
+            existing = self.nftLockCountByKey.get(lockKey)!!;
+        }
+        self.nftLockCountByKey.set(lockKey, existing + nftCount);
+        self.voteNftAddressByKey.set(lockKey, sender());
+        self.pendingSupportByKey.set(lockKey, support);
+        self.pendingReadyByKey.set(lockKey, 1);
+        self.tryFinalizeVote(lockKey, proposalId, voter);
+    }
+
+    receive(msg: JettonTransferNotification) {
+        require(sender() == self.jettonWallet, "JETTON_WALLET_ONLY");
+
+        let fwd = msg.forwardPayload;
+        let op = fwd.loadUint(32);
+        require(op == 0x564f5445, "JETTON_BAD_PAYLOAD");
+
+        let proposalId = fwd.loadUint(32);
+        let support = fwd.loadUint(1);
+        let voter = fwd.loadAddress();
+
+        let lockKey = makeVoteKey(proposalId, voter);
+        require(!self.voteChoiceByKey.exists(lockKey), "ALREADY_VOTED");
+        require(msg.sender == voter, "JETTON_OWNER_MISMATCH");
+
+        self.jettonLockByKey.set(lockKey, msg.amount);
+        self.pendingJettonSenderByKey.set(lockKey, msg.sender);
+        self.pendingSupportByKey.set(lockKey, support);
+        self.pendingReadyByKey.set(lockKey, 1);
+        self.tryFinalizeVote(lockKey, proposalId, voter);
+    }
+
     receive(msg: ClaimFor) {
         require(self.proposalCreator.exists(msg.proposalId), "UNKNOWN_PROPOSAL");
         require(now() >= self.proposalEndAt.get(msg.proposalId)!!, "VOTING_ACTIVE");
@@ -230,6 +308,44 @@ contract VotingEscrow with Deployable {
             .storeUint(self.voteNftLockedByKey.get(key)!!, 16)
             .storeCoins(self.voteJettonLockedByKey.get(key)!!)
             .endCell();
+
+        if (self.voteNftAddressByKey.exists(key)) {
+            let nftTransfer = NftTransfer{
+                queryId: msg.queryId,
+                newOwner: msg.voter,
+                responseDestination: self.owner,
+                customPayload: null,
+                forwardAmount: 0,
+                forwardPayload: beginCell().endCell().beginParse(),
+            }.toCell();
+            send(SendParameters{
+                to: self.voteNftAddressByKey.get(key)!!,
+                value: NFT_RETURN_GAS,
+                mode: SendPayGasSeparately,
+                bounce: false,
+                body: nftTransfer,
+            });
+        }
+
+        if (self.voteJettonLockedByKey.get(key)!! > 0) {
+            let jettonTransfer = JettonTransfer{
+                queryId: msg.queryId,
+                amount: self.voteJettonLockedByKey.get(key)!!,
+                destination: msg.voter,
+                responseDestination: self.owner,
+                customPayload: null,
+                forwardTonAmount: 0,
+                forwardPayload: beginCell().endCell().beginParse(),
+            }.toCell();
+            send(SendParameters{
+                to: self.jettonWallet,
+                value: JETTON_RETURN_GAS,
+                mode: SendPayGasSeparately,
+                bounce: false,
+                body: jettonTransfer,
+            });
+        }
+
         send(SendParameters{
             to: msg.voter,
             value: GAS_RESERVE,
@@ -253,6 +369,10 @@ contract VotingEscrow with Deployable {
 
     get fun feeBalance(): Int {
         return self.feeBalance;
+    }
+
+    get fun jettonWallet(): Address {
+        return self.jettonWallet;
     }
 
     get fun proposalCount(): Int {
@@ -309,6 +429,7 @@ contract VotingEscrow with Deployable {
     get fun voteClaimed(proposalId: Int, voter: Address): Int? {
         return self.voteClaimedByKey.get(makeVoteKey(proposalId, voter));
     }
+    
 }
 
 inline fun safeAdd(value: Int, amount: Int): Int {
@@ -343,4 +464,88 @@ inline fun makeVoteKey(proposalId: Int, voter: Address): Int {
         .storeAddress(voter)
         .endCell()
         .hash();
+}
+
+extends mutates fun castVoteInternal(
+    self: VotingEscrow,
+    proposalId: Int,
+    voter: Address,
+    support: Int,
+    lockedNfts: Int,
+    lockedJettons: Int,
+    enforceLockValue: Bool
+) {
+    if (enforceLockValue) {
+        require(context().value >= VOTE_FEE + VOTE_LOCK, "LOW_VOTE_LOCK");
+    }
+
+    require(self.proposalCreator.exists(proposalId), "UNKNOWN_PROPOSAL");
+    let endAt = self.proposalEndAt.get(proposalId)!!;
+    require(now() < endAt, "VOTING_ENDED");
+
+    let key = makeVoteKey(proposalId, voter);
+    require(!self.voteChoiceByKey.exists(key), "ALREADY_VOTED");
+    require(lockedNfts > 0, "NFT_LOCK_REQUIRED");
+
+    let yesVotes = self.proposalYesVotes.get(proposalId)!!;
+    let noVotes = self.proposalNoVotes.get(proposalId)!!;
+    let voters = self.proposalVoters.get(proposalId)!!;
+    let pendingClaims = self.proposalPendingClaims.get(proposalId)!!;
+
+    if (support == 1) {
+        self.proposalYesVotes.set(proposalId, yesVotes + 1);
+    } else {
+        self.proposalNoVotes.set(proposalId, noVotes + 1);
+    }
+    self.proposalVoters.set(proposalId, voters + 1);
+    self.proposalPendingClaims.set(proposalId, pendingClaims + 1);
+
+    self.voteChoiceByKey.set(key, support);
+    self.voteClaimedByKey.set(key, 0);
+    self.voteNftLockedByKey.set(key, lockedNfts);
+    self.voteJettonLockedByKey.set(key, lockedJettons);
+    self.voteOwnerByKey.set(key, voter);
+    self.voteProposalByKey.set(key, proposalId);
+
+    if (self.pendingSupportByKey.exists(key)) {
+        self.pendingSupportByKey.del(key);
+    }
+    if (self.pendingReadyByKey.exists(key)) {
+        self.pendingReadyByKey.del(key);
+    }
+    if (self.nftLockCountByKey.exists(key)) {
+        self.nftLockCountByKey.del(key);
+    }
+    if (self.jettonLockByKey.exists(key)) {
+        self.jettonLockByKey.del(key);
+    }
+    if (self.pendingJettonSenderByKey.exists(key)) {
+        self.pendingJettonSenderByKey.del(key);
+    }
+
+    self.feeBalance = safeAdd(self.feeBalance, VOTE_FEE);
+}
+
+extends mutates fun tryFinalizeVote(self: VotingEscrow, key: Int, proposalId: Int, voter: Address) {
+    if (!self.pendingReadyByKey.exists(key) || self.pendingReadyByKey.get(key)!! == 0) {
+        return;
+    }
+    if (!self.pendingSupportByKey.exists(key)) {
+        return;
+    }
+    if (!self.nftLockCountByKey.exists(key)) {
+        return;
+    }
+    if (!self.jettonLockByKey.exists(key)) {
+        return;
+    }
+
+    self.castVoteInternal(
+        proposalId,
+        voter,
+        self.pendingSupportByKey.get(key)!!,
+        self.nftLockCountByKey.get(key)!!,
+        self.jettonLockByKey.get(key)!!,
+        false
+    );
 }
